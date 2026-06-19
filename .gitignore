@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# uv / venv
+.venv/
+
+# Data (corpus brut et fichiers volumineux)
+data/
+*.txt
+!requirements*.txt
+
+# Modèles entraînés / checkpoints
+*.pt
+*.pth
+checkpoints/
+
+# Sorties générées
+samples/*.log
+
+# OS / éditeurs
+.DS_Store
+.vscode/
+.idea/
