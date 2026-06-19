@@ -60,7 +60,9 @@ struct Core {
 }
 
 /// Learn BPE merges on `text` up to `vocab_size` tokens.
-fn train_core(text: &str, vocab_size: usize) -> Core {
+///
+/// `on_step(n)` is invoked after the n-th merge (1-based), for progress reporting.
+fn train_core(text: &str, vocab_size: usize, mut on_step: impl FnMut(usize)) -> Core {
     // Frequency of each pre-token chunk.
     let mut freqs: HashMap<&str, i64> = HashMap::new();
     for w in pretokenize(text) {
@@ -150,6 +152,7 @@ fn train_core(text: &str, vocab_size: usize) -> Core {
         }
         counts.remove(&best_pair);
         where_.remove(&best_pair);
+        on_step(k + 1);
     }
 
     Core {
@@ -263,9 +266,31 @@ struct Tokenizer {
 #[pymethods]
 impl Tokenizer {
     /// Train a new tokenizer on `text` up to `vocab_size` tokens.
+    ///
+    /// `progress`, if given, is called as `progress(step, total)` a couple of
+    /// hundred times over the run (throttled) for a live progress bar.
     #[staticmethod]
-    fn train(py: Python<'_>, text: String, vocab_size: usize) -> Self {
-        let core = py.allow_threads(|| train_core(&text, vocab_size));
+    #[pyo3(signature = (text, vocab_size, progress=None))]
+    fn train(
+        py: Python<'_>,
+        text: String,
+        vocab_size: usize,
+        progress: Option<Py<PyAny>>,
+    ) -> Self {
+        let total = vocab_size.saturating_sub(256);
+        let stride = (total / 200).max(1); // ~200 updates, keep callback overhead tiny
+        let core = py.allow_threads(|| {
+            train_core(&text, vocab_size, |step| {
+                if let Some(cb) = progress.as_ref() {
+                    if step % stride == 0 || step == total {
+                        // briefly reacquire the GIL to call back into Python
+                        Python::with_gil(|py| {
+                            let _ = cb.bind(py).call1((step, total));
+                        });
+                    }
+                }
+            })
+        });
         Tokenizer { core }
     }
 

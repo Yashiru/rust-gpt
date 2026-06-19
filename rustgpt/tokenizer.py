@@ -55,12 +55,17 @@ class Tokenizer:
 
     # ----------------------------------------------------------------- train #
     @classmethod
-    def train(cls, text, vocab_size):
-        """Learn BPE merges on `text` up to `vocab_size`, returning a Tokenizer."""
+    def train(cls, text, vocab_size, progress=None):
+        """Learn BPE merges on `text` up to `vocab_size`, returning a Tokenizer.
+
+        `progress`, if given, is called as `progress(step, total)` after each merge
+        (same signature as the Rust drop-in) for a live progress bar.
+        """
         word_freqs = Counter(re.findall(GPT2_PAT, text))
         ids = {tuple(w.encode("utf-8")): f for w, f in word_freqs.items()}
         merges, vocab = {}, {i: bytes([i]) for i in range(256)}
-        for k in range(vocab_size - 256):
+        total = vocab_size - 256
+        for k in range(total):
             stats = _get_stats(ids)
             if not stats:
                 break  # no pair left to merge
@@ -69,6 +74,8 @@ class Tokenizer:
             ids = {_merge(word, pair, idx): freq for word, freq in ids.items()}
             merges[pair] = idx
             vocab[idx] = vocab[pair[0]] + vocab[pair[1]]
+            if progress is not None:
+                progress(k + 1, total)
         return cls(merges, vocab)
 
     # --------------------------------------------------------- encode/decode #

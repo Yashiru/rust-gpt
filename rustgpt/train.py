@@ -18,21 +18,19 @@ CORPUS_PATH = Path("data/rust_corpus.txt")  # concatenated .rs files
 IDS_PATH = Path("data/rust_ids.bin")        # corpus encoded to token ids (uint16 cache)
 WEIGHTS_PATH = Path("weights.pt")           # trained model cache
 VOCAB_PATH = Path("tokenizer.json")         # trained tokenizer cache
-VOCAB_SIZE = 8192                           # 256 base bytes + 7936 learned merges
+VOCAB_SIZE = 32768                           # 256 base bytes + 7936 learned merges
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # train on the GPU when available
 
 STEPS = 5000
 LR = 1e-3
-LR_FINE = 1e-4      # after 60% of the steps, drop the learning rate
-BATCH_SIZE = 64
-BLOCK_SIZE = 256    # training context length (must be <= the model's context_size)
-VAL_FRAC = 0.1      # fraction of the token stream held out for validation
-EVAL_INTERVAL = 250 # estimate train/val loss every N steps
-EVAL_ITERS = 50     # how many batches to average when estimating loss
-DROPOUT = 0.2       # regularization: drop this fraction of activations during training
-WEIGHT_DECAY = 0.1  # AdamW L2 penalty (applied to matmul/embedding weights only)
-EARLY_STOP_PATIENCE = 5  # stop if val loss hasn't improved for this many evals
-
+LR_FINE = 1e-4          # after 60% of the steps, drop the learning rate
+BATCH_SIZE = 32
+BLOCK_SIZE = 512       # training context length (must be <= the model's context_size)
+VAL_FRAC = 0.1          # fraction of the token stream held out for validation
+EVAL_INTERVAL = 250     # estimate train/val loss every N steps
+EVAL_ITERS = 50         # how many batches to average when estimating loss
+DROPOUT = 0.2           # regularization: drop this fraction of activations during training
+WEIGHT_DECAY = 0.1      # AdamW L2 penalty (applied to matmul/embedding weights only)
 
 def load_or_train_tokenizer():
     """Load the tokenizer from the JSON cache, or train it (in Rust) if absent."""
@@ -51,8 +49,12 @@ def load_or_train_tokenizer():
     text = CORPUS_PATH.read_text(encoding="utf-8")
     print(f"Training BPE (vocab_size={VOCAB_SIZE}, backend={TOKENIZER_BACKEND}) on "
           f"{CORPUS_PATH} ({len(text.encode('utf-8')):,} bytes) ...")
+    from tqdm import tqdm
+
     t0 = time.time()
-    tok = Tokenizer.train(text, VOCAB_SIZE)
+    with tqdm(total=VOCAB_SIZE - 256, desc="BPE merges", unit="merge") as bar:
+        tok = Tokenizer.train(text, VOCAB_SIZE,
+                              progress=lambda step, total: bar.update(step - bar.n))
     tok.save(str(VOCAB_PATH))
     print(f"  trained {tok.vocab_size} tokens in {time.time() - t0:.1f}s, saved to {VOCAB_PATH}")
     return tok
