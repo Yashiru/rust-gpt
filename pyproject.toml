@@ -12,6 +12,7 @@ dependencies = [
     "torch>=2.12.1",
     "tqdm>=4.68.3",
     "bpe-rs",                # optional Rust accelerator for the tokenizer (workspace member)
+    "datasets>=5.0.0",
 ]
 
 [build-system]
