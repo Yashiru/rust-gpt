@@ -1,12 +1,14 @@
 [project]
 name = "rust-gpt"
 version = "0.1.0"
-description = "A char-level GPT (PyTorch) trained from scratch on Rust source code, Phase 1 capstone."
+description = "A GPT trained from scratch on Rust source code, with a from-scratch BPE tokenizer."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "matplotlib>=3.11.0",
     "numpy>=2.4.6",
+    "regex>=2026.5.9",
+    "requests>=2.34.2",
     "torch>=2.12.1",
     "tqdm>=4.68.3",
 ]
