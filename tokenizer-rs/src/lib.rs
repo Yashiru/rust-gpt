@@ -1,9 +1,9 @@
-//! Byte-Pair Encoding tokenizer, Rust core + PyO3 bindings.
+//! `bpe_rs`, an ultra-fast Rust drop-in for rustgpt's pure-Python BPE tokenizer.
 //!
-//! Behaviour mirrors the from-scratch Python implementation it replaces: GPT-2
-//! style regex pre-tokenization, BPE merges learned *inside* each chunk, and the
-//! exact same JSON on-disk format, so an existing `tokenizer.json` keeps working
-//! and encoding is identical given the same merges (see `tests/test_tokenizer.py`).
+//! Behaviour mirrors the Python reference (`rustgpt/tokenizer.py`): GPT-2 style
+//! regex pre-tokenization, BPE merges learned *inside* each chunk, and the exact
+//! same JSON on-disk format, so the two are interchangeable and encoding is
+//! identical given the same merges (asserted in `tests/test_tokenizer.py`).
 //!
 //! Training uses an incremental pair-count index (only the words touched by a
 //! merge are rescanned) and batch encoding is parallelized with rayon.
@@ -322,7 +322,7 @@ impl Tokenizer {
 }
 
 #[pymodule]
-fn _bpe(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn bpe_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Tokenizer>()?;
     Ok(())
 }

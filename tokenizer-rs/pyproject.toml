@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "bpe-rs"
+version = "0.1.0"
+description = "Ultra-fast Rust BPE tokenizer, a drop-in accelerator for rustgpt's Python tokenizer"
+requires-python = ">=3.12"
+classifiers = ["Programming Language :: Rust"]
+
+[tool.maturin]
+module-name = "bpe_rs"
+features = ["pyo3/extension-module"]

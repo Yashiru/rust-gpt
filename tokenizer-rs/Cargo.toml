@@ -1,11 +1,11 @@
 [package]
-name = "rustgpt"
+name = "bpe-rs"
 version = "0.1.0"
 edition = "2021"
-description = "Ultra-fast byte-pair-encoding tokenizer (Rust core, Python bindings)"
+description = "Ultra-fast byte-pair-encoding tokenizer, a Rust drop-in for rustgpt's Python BPE"
 
 [lib]
-name = "_bpe"
+name = "bpe_rs"
 crate-type = ["cdylib"]
 
 [dependencies]

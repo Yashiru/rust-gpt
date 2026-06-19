@@ -10,8 +10,8 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+from rustgpt import Tokenizer, TOKENIZER_BACKEND  # fast Rust drop-in if built, else Python
 from rustgpt.model import GPT
-from rustgpt.tokenizer import Tokenizer
 from rustgpt.data import load_or_encode_corpus, train_val_split, get_batch
 
 CORPUS_PATH = Path("data/rust_corpus.txt")  # concatenated .rs files
@@ -49,8 +49,8 @@ def load_or_train_tokenizer():
         )
 
     text = CORPUS_PATH.read_text(encoding="utf-8")
-    print(f"Training BPE (vocab_size={VOCAB_SIZE}) on {CORPUS_PATH} "
-          f"({len(text.encode('utf-8')):,} bytes) ...")
+    print(f"Training BPE (vocab_size={VOCAB_SIZE}, backend={TOKENIZER_BACKEND}) on "
+          f"{CORPUS_PATH} ({len(text.encode('utf-8')):,} bytes) ...")
     t0 = time.time()
     tok = Tokenizer.train(text, VOCAB_SIZE)
     tok.save(str(VOCAB_PATH))

@@ -13,10 +13,12 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "tests"))
+sys.path.insert(0, str(REPO_ROOT))
 
-import reference_bpe as ref  # noqa: E402
-from rustgpt import Tokenizer  # noqa: E402
+from rustgpt.tokenizer import Tokenizer as PyTokenizer  # pure-Python reference  # noqa: E402
+
+import bpe_rs  # noqa: E402
+RustTokenizer = bpe_rs.Tokenizer
 
 CORPUS = REPO_ROOT / "data" / "rust_corpus.txt"
 VOCAB_SIZE = 8192
@@ -43,20 +45,20 @@ def main():
     print(f"head-to-head on {nbytes:,} bytes (vocab {VOCAB_SIZE})\n")
 
     # --- train ---
-    (py_merges, _), py_train = timed(lambda: ref.train(text, VOCAB_SIZE))
-    rust, rust_train = timed(lambda: Tokenizer.train(text, VOCAB_SIZE))
+    py, py_train = timed(lambda: PyTokenizer.train(text, VOCAB_SIZE))
+    rust, rust_train = timed(lambda: RustTokenizer.train(text, VOCAB_SIZE))
     print(f"train   Python {py_train:8.2f}s | Rust {rust_train:7.2f}s "
           f"| {py_train / rust_train:6.0f}x")
 
     # --- encode (same merges -> identical ids, asserted in the test suite) ---
-    _, py_enc = timed(lambda: ref.encode(text, py_merges))
+    _, py_enc = timed(lambda: py.encode(text))
     _, rust_enc = timed(lambda: rust.encode(text))
     print(f"encode  Python {py_enc:8.2f}s | Rust {rust_enc:7.2f}s "
           f"| {py_enc / rust_enc:6.0f}x")
 
     # --- Rust on the full corpus ---
     full_bytes = len(full.encode("utf-8"))
-    _, rust_full = timed(lambda: Tokenizer.train(full, VOCAB_SIZE))
+    _, rust_full = timed(lambda: RustTokenizer.train(full, VOCAB_SIZE))
     print(f"\nRust train on full corpus ({full_bytes / 1e6:.0f} MB): {rust_full:.2f}s")
     ids, rust_full_enc = timed(lambda: rust.encode(full))
     print(f"Rust encode full corpus: {rust_full_enc:.2f}s "

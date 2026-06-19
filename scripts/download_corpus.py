@@ -238,8 +238,8 @@ def parse_args():
                    help="total corpus size cap in bytes (default: 25_000_000)")
     p.add_argument("--out", default="data/rust_corpus.txt",
                    help="output corpus path (default: data/rust_corpus.txt)")
-    p.add_argument("--top-n", type=int, default=300,
-                   help="how many top-downloaded crates to consider (default: 300)")
+    p.add_argument("--top-n", type=int, default=1000,
+                   help="how many top-downloaded crates to consider (default: 1000)")
     p.add_argument("--max-file-bytes", type=int, default=64_000,
                    help="skip .rs files larger than this (default: 64_000)")
     p.add_argument("--cache-dir", default="data/.crate_cache",
