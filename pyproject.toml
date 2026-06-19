@@ -1,7 +1,11 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
 [project]
-name = "rust-gpt"
+name = "rustgpt"
 version = "0.1.0"
-description = "A GPT trained from scratch on Rust source code, with a from-scratch BPE tokenizer."
+description = "A GPT trained from scratch on Rust, with an ultra-fast Rust BPE tokenizer (PyO3)."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -12,3 +16,14 @@ dependencies = [
     "torch>=2.12.1",
     "tqdm>=4.68.3",
 ]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.14.1",
+    "pytest>=8",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "rustgpt._bpe"
+features = ["pyo3/extension-module"]

@@ -21,6 +21,10 @@ checkpoints/
 # Sorties générées
 samples/*.log
 
+# Rust / maturin (Cargo.lock is kept for reproducible builds)
+target/
+*.so
+
 # OS / éditeurs
 .DS_Store
 .vscode/

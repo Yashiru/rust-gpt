@@ -1,10 +1,18 @@
+"""Train the GPT on the Rust corpus: tokenizer -> dataset -> model -> generation.
+
+Run from the repo root with `python -m rustgpt.train` (paths are relative to CWD).
+"""
+
+import time
 from pathlib import Path
-from tqdm import tqdm
-import numpy as np
-import tokenizer as tok
-from gpt import GPT
+
 import torch
 import torch.nn.functional as F
+import numpy as np
+
+from rustgpt.model import GPT
+from rustgpt.tokenizer import Tokenizer
+from rustgpt.data import load_or_encode_corpus, train_val_split, get_batch
 
 CORPUS_PATH = Path("data/rust_corpus.txt")  # concatenated .rs files
 IDS_PATH = Path("data/rust_ids.bin")        # corpus encoded to token ids (uint16 cache)
@@ -26,80 +34,28 @@ WEIGHT_DECAY = 0.1  # AdamW L2 penalty (applied to matmul/embedding weights only
 EARLY_STOP_PATIENCE = 5  # stop if val loss hasn't improved for this many evals
 
 
-def load_or_train():
-    """Load the tokenizer from the JSON cache, or train it if the cache is absent."""
+def load_or_train_tokenizer():
+    """Load the tokenizer from the JSON cache, or train it (in Rust) if absent."""
     if VOCAB_PATH.exists():
         print(f"Loading tokenizer from {VOCAB_PATH} ...")
-        merges, vocab = tok.load(VOCAB_PATH)
-        print(f"  loaded {len(vocab)} tokens ({len(merges)} merges)")
-        return merges, vocab
+        tok = Tokenizer.load(str(VOCAB_PATH))
+        print(f"  loaded {tok.vocab_size} tokens")
+        return tok
 
     if not CORPUS_PATH.exists():
         raise SystemExit(
             f"Corpus not found: {CORPUS_PATH}\n"
-            f"Drop a Rust corpus there (concatenated .rs files) and re-run."
+            f"Build one with `python scripts/download_corpus.py` and re-run."
         )
 
     text = CORPUS_PATH.read_text(encoding="utf-8")
-    n_bytes = len(text.encode("utf-8"))
     print(f"Training BPE (vocab_size={VOCAB_SIZE}) on {CORPUS_PATH} "
-          f"({n_bytes:,} bytes) ...")
-
-    with tqdm(total=VOCAB_SIZE - 256, desc="merges") as bar:
-        merges, vocab = tok.train(
-            text, VOCAB_SIZE,
-            on_step=lambda step, pair, count, vs: bar.update(1),
-        )
-
-    tok.save(VOCAB_PATH, merges, vocab,
-             meta={"corpus": str(CORPUS_PATH), "corpus_bytes": n_bytes})
-    print(f"  trained {len(vocab)} tokens, saved to {VOCAB_PATH}")
-    return merges, vocab
-
-
-def load_or_encode_corpus(merges):
-    """Encode the whole corpus to a flat array of token ids, caching it on disk.
-
-    BPE encoding in pure Python is slow, so we do it once and cache the result as
-    a uint16 binary (vocab < 65536 fits). Delete `data/rust_ids.bin` whenever the
-    tokenizer is retrained, otherwise this stale cache no longer matches the vocab.
-    """
-    if IDS_PATH.exists():
-        print(f"Loading encoded corpus from {IDS_PATH} ...")
-        ids = np.fromfile(IDS_PATH, dtype=np.uint16)
-        print(f"  loaded {len(ids):,} tokens")
-        return ids
-
-    print(f"Encoding the corpus {CORPUS_PATH} (one-time; pure-Python BPE is slow) ...")
-    text = CORPUS_PATH.read_text(encoding="utf-8")
-    ids = np.array(tok.encode(text, merges), dtype=np.uint16)
-    IDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    ids.tofile(IDS_PATH)
-    print(f"  encoded {len(ids):,} tokens, cached to {IDS_PATH}")
-    return ids
-
-
-def train_val_split(ids):
-    """Move the token stream to the device as one 1D tensor, split into train/val.
-
-    Indices into Embedding / targets for cross_entropy must be int64. The whole
-    stream lives on the GPU once (a few hundred MB); batches are sliced from it.
-    """
-    data = torch.from_numpy(ids.astype(np.int64)).to(DEVICE)
-    n = int((1 - VAL_FRAC) * len(data))
-    return data[:n], data[n:]
-
-
-def get_batch(data, block_size, batch_size):
-    """Sample `batch_size` random contiguous windows of `block_size` tokens.
-
-    The target `y` is `x` shifted right by one, so position t in x predicts the
-    token at position t+1, every position in the block is a training example.
-    """
-    ix = torch.randint(len(data) - block_size, (batch_size,), device=data.device)
-    x = torch.stack([data[i:i + block_size] for i in ix])          # (B, T)
-    y = torch.stack([data[i + 1:i + block_size + 1] for i in ix])  # (B, T), shifted by 1
-    return x, y
+          f"({len(text.encode('utf-8')):,} bytes) ...")
+    t0 = time.time()
+    tok = Tokenizer.train(text, VOCAB_SIZE)
+    tok.save(str(VOCAB_PATH))
+    print(f"  trained {tok.vocab_size} tokens in {time.time() - t0:.1f}s, saved to {VOCAB_PATH}")
+    return tok
 
 
 def pick_amp_dtype():
@@ -142,15 +98,15 @@ def estimate_loss(model, train_data, val_data, amp_dtype):
     return means[0], means[1]
 
 
-def generate_sample(model, merges, vocab, prompt, max_new_tokens=200,
+def generate_sample(model, tokenizer, prompt, max_new_tokens=200,
                     temperature=0.8, top_k=50):
     """Encode `prompt`, let the model continue it, and decode back to Rust text."""
     model.eval()
-    ids = tok.encode(prompt, merges)
+    ids = tokenizer.encode(prompt)
     idx = torch.tensor([ids], dtype=torch.int64, device=DEVICE)  # (1, T)
     out = model.generate(idx, max_new_tokens, temperature=temperature, top_k=top_k)
     model.train()
-    return tok.decode(out[0].tolist(), vocab)
+    return tokenizer.decode(out[0].tolist())
 
 
 def train_or_load(model, train_data, val_data, amp_dtype=None):
@@ -188,6 +144,8 @@ def train(model, train_data, val_data, amp_dtype=None):
     Logs the train/val curve, keeps the best (least-overfit) checkpoint, and stops
     early once val stops improving, then restores that best checkpoint.
     """
+    from tqdm import tqdm
+
     decay_at = int(0.6 * STEPS)
     optimizer = build_optimizer(model, LR, WEIGHT_DECAY)
     # GradScaler handles fp16's tiny-gradient underflow (dynamic scaling + skips
@@ -246,18 +204,19 @@ def training_step(model, optimizer, scaler, xb, yb, amp_dtype):
     scaler.update()
     return loss
 
+
 def main():
-    # 1. tokenizer: load or train
-    merges, vocab = load_or_train()
+    # 1. tokenizer: load or train (native Rust BPE)
+    tokenizer = load_or_train_tokenizer()
 
     # 2. dataset: encode (cached) -> 1D token stream -> train/val split
-    ids = load_or_encode_corpus(merges)
-    train_data, val_data = train_val_split(ids)
+    ids = load_or_encode_corpus(tokenizer, CORPUS_PATH, IDS_PATH)
+    train_data, val_data = train_val_split(ids, VAL_FRAC, DEVICE)
     print(f"  train {len(train_data):,} tokens | val {len(val_data):,} tokens "
           f"| block {BLOCK_SIZE} | batch {BATCH_SIZE}")
 
     # 3. model
-    model = GPT(vocab_size=len(vocab), n_embd=256, n_head=4, n_layer=4,
+    model = GPT(vocab_size=tokenizer.vocab_size, n_embd=256, n_head=4, n_layer=4,
                 context_size=1024, dropout=DROPOUT)
     assert BLOCK_SIZE <= 1024, "BLOCK_SIZE must not exceed the model's context_size"
     model.to(DEVICE)
@@ -271,7 +230,7 @@ def main():
     print("\n--- generation ---")
     print(f"prompt      : {prompt!r}")
     print("continuation:")
-    print(generate_sample(model, merges, vocab, prompt, max_new_tokens=200))
+    print(generate_sample(model, tokenizer, prompt, max_new_tokens=200))
 
 
 if __name__ == "__main__":
