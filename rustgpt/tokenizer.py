@@ -99,6 +99,20 @@ class Tokenizer:
         """Encode many strings (the Rust drop-in does this in parallel)."""
         return [self.encode(t) for t in texts]
 
+    def encode_u16_bytes(self, text):
+        """Encode `text`, returning ids packed as little-endian uint16 bytes.
+
+        Bulk path for large corpora, matching the Rust drop-in's signature so
+        `data.py` works with either backend. Requires vocab_size <= 65536.
+        (The pure-Python path still builds an int list, so it's only practical on
+        small inputs; use the Rust accelerator for multi-GB corpora.)
+        """
+        import numpy as np
+
+        if len(self.vocab) > 65536:
+            raise ValueError("encode_u16_bytes requires vocab_size <= 65536")
+        return np.asarray(self.encode(text), dtype="<u2").tobytes()
+
     def decode(self, ids):
         """Decode token ids back into a string (lossy on incomplete UTF-8)."""
         data = b"".join(self.vocab[i] for i in ids)

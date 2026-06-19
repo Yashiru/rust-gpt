@@ -3,8 +3,17 @@
 Run from the repo root with `python -m rustgpt.train` (paths are relative to CWD).
 """
 
+import math
+import os
 import time
 from pathlib import Path
+
+# Pin training to GPU 0 (the RTX 2080 Ti) by default, so the desktop GPU stays
+# free. Must be set before torch initializes CUDA. The GTX 1070 is sm_61 and
+# unsupported by this PyTorch build anyway. Override by exporting CUDA_VISIBLE_DEVICES.
+os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")  # number GPUs like nvidia-smi
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")  # fewer fragmentation OOMs
 
 import torch
 import torch.nn.functional as F
@@ -17,20 +26,31 @@ CORPUS_PATH = Path("data/rust_corpus.txt")  # concatenated .rs files
 IDS_PATH = Path("data/rust_ids.bin")        # corpus encoded to token ids (uint16 cache)
 WEIGHTS_PATH = Path("weights.pt")           # trained model cache
 VOCAB_PATH = Path("tokenizer.json")         # trained tokenizer cache
-VOCAB_SIZE = 32768                           # 256 base bytes + 32512 learned merges
+VOCAB_SIZE = 16384         # 256 base bytes + 16128 merges (balanced for this model size)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # train on the GPU when available
+torch.backends.cudnn.benchmark = True  # fixed input shapes -> let cuDNN autotune kernels
 
-STEPS = 5000
-LR = 1e-3
-LR_FINE = 1e-4          # after 60% of the steps, drop the learning rate
-BATCH_SIZE = 32
-BLOCK_SIZE = 512       # training context length (must be <= the model's context_size)
+# Modern transformer (RoPE + SwiGLU + RMSNorm + weight tying), tuned for an 11 GB
+# RTX 2080 Ti. Weight tying frees ~8M params, reinvested into depth (10 layers).
+N_EMBD = 512
+N_HEAD = 8
+N_LAYER = 10
+CONTEXT_SIZE = 1024        # max positions the model supports
+
+STEPS = 55000           # ~1 epoch over the ~900M-token (3.1 GB) corpus at batch 32 / block 512
+LR = 6e-4               # peak LR; warmup + cosine decay make this safe
+MIN_LR = 6e-5           # cosine floor (final LR)
+WARMUP_STEPS = 1000     # ~2% of STEPS, linear warmup from 0 to peak
+GRAD_CLIP = 1.0         # clip the global gradient norm (training stability)
+BATCH_SIZE = 32         # measured to fit ~8.3 GB at L10/block 512 (B40+ OOMs once the desktop shares GPU 0)
+BLOCK_SIZE = 512        # training context length (must be <= CONTEXT_SIZE)
 VAL_FRAC = 0.1          # fraction of the token stream held out for validation
 EVAL_INTERVAL = 250     # estimate train/val loss every N steps
 EVAL_ITERS = 50         # how many batches to average when estimating loss
 DROPOUT = 0.2           # regularization: drop this fraction of activations during training
 WEIGHT_DECAY = 0.1      # AdamW L2 penalty (applied to matmul/embedding weights only)
 EARLY_STOP_PATIENCE = 5 # stop if val loss hasn't improved for this many evals
+TOKENIZER_SAMPLE_CHARS = 300_000_000  # train the BPE on a sample, not the whole corpus
 
 def load_or_train_tokenizer():
     """Load the tokenizer from the JSON cache, or train it (in Rust) if absent."""
@@ -46,9 +66,13 @@ def load_or_train_tokenizer():
             f"Build one with `python scripts/download_corpus.py` and re-run."
         )
 
-    text = CORPUS_PATH.read_text(encoding="utf-8")
-    print(f"Training BPE (vocab_size={VOCAB_SIZE}, backend={TOKENIZER_BACKEND}) on "
-          f"{CORPUS_PATH} ({len(text.encode('utf-8')):,} bytes) ...")
+    # BPE frequency stats converge fast, so we train on a sample rather than the
+    # whole corpus (training on multiple GB is needlessly slow). The full corpus is
+    # still encoded with the resulting tokenizer (see load_or_encode_corpus).
+    with open(CORPUS_PATH, encoding="utf-8") as f:
+        text = f.read(TOKENIZER_SAMPLE_CHARS)
+    print(f"Training BPE (vocab_size={VOCAB_SIZE}, backend={TOKENIZER_BACKEND}) on a "
+          f"{len(text.encode('utf-8')):,}-byte sample of {CORPUS_PATH} ...")
     from tqdm import tqdm
 
     t0 = time.time()
@@ -93,7 +117,7 @@ def estimate_loss(model, train_data, val_data, amp_dtype):
     for data in (train_data, val_data):
         losses = torch.zeros(EVAL_ITERS)
         for k in range(EVAL_ITERS):
-            xb, yb = get_batch(data, BLOCK_SIZE, BATCH_SIZE)
+            xb, yb = get_batch(data, BLOCK_SIZE, BATCH_SIZE, DEVICE)
             losses[k] = compute_loss(model, xb, yb, amp_dtype).item()
         means.append(losses.mean().item())
     model.train()
@@ -124,6 +148,16 @@ def train_or_load(model, train_data, val_data, amp_dtype=None):
         print(f"  trained and saved to {WEIGHTS_PATH}.")
 
 
+def lr_at(step):
+    """Linear warmup for WARMUP_STEPS, then cosine decay from LR down to MIN_LR."""
+    if step < WARMUP_STEPS:
+        return LR * (step + 1) / WARMUP_STEPS
+    if step >= STEPS:
+        return MIN_LR
+    progress = (step - WARMUP_STEPS) / max(1, STEPS - WARMUP_STEPS)
+    return MIN_LR + 0.5 * (LR - MIN_LR) * (1 + math.cos(math.pi * progress))
+
+
 def build_optimizer(model, lr, weight_decay):
     """AdamW with the idiomatic split: decay matmul/embedding weights, not 1D params.
 
@@ -148,7 +182,6 @@ def train(model, train_data, val_data, amp_dtype=None):
     """
     from tqdm import tqdm
 
-    decay_at = int(0.6 * STEPS)
     optimizer = build_optimizer(model, LR, WEIGHT_DECAY)
     # GradScaler handles fp16's tiny-gradient underflow (dynamic scaling + skips
     # inf/nan steps). It's a no-op passthrough for bf16/fp32, hence `enabled`.
@@ -162,10 +195,10 @@ def train(model, train_data, val_data, amp_dtype=None):
 
     with tqdm(total=STEPS, desc="training") as bar:
         for step in range(STEPS):
-            lr = LR_FINE if step >= decay_at else LR
+            lr = lr_at(step)
             for group in optimizer.param_groups:
                 group["lr"] = lr
-            xb, yb = get_batch(train_data, BLOCK_SIZE, BATCH_SIZE)
+            xb, yb = get_batch(train_data, BLOCK_SIZE, BATCH_SIZE, DEVICE)
             training_step(model, optimizer, scaler, xb, yb, amp_dtype)
             if step % EVAL_INTERVAL == 0 or step == STEPS - 1:
                 tr, va = estimate_loss(model, train_data, val_data, amp_dtype)
@@ -198,29 +231,37 @@ def print_history(history, best_val):
 
 
 def training_step(model, optimizer, scaler, xb, yb, amp_dtype):
-    """One standard optimization step: zero_grad -> backward -> step, with AMP scaling."""
+    """One step: zero_grad -> backward -> unscale -> clip -> step, with AMP scaling."""
     optimizer.zero_grad(set_to_none=True)
     loss = compute_loss(model, xb, yb, amp_dtype)
     scaler.scale(loss).backward()
+    scaler.unscale_(optimizer)  # unscale before clipping so the threshold is in real units
+    torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
     scaler.step(optimizer)
     scaler.update()
     return loss
 
 
 def main():
+    if DEVICE == "cuda":
+        print(f"Device: {torch.cuda.get_device_name(0)} "
+              f"(CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', 'all')})")
+    else:
+        print("Device: CPU")
+
     # 1. tokenizer: load or train (native Rust BPE)
     tokenizer = load_or_train_tokenizer()
 
     # 2. dataset: encode (cached) -> 1D token stream -> train/val split
     ids = load_or_encode_corpus(tokenizer, CORPUS_PATH, IDS_PATH)
-    train_data, val_data = train_val_split(ids, VAL_FRAC, DEVICE)
+    train_data, val_data = train_val_split(ids, VAL_FRAC)
     print(f"  train {len(train_data):,} tokens | val {len(val_data):,} tokens "
           f"| block {BLOCK_SIZE} | batch {BATCH_SIZE}")
 
     # 3. model
-    model = GPT(vocab_size=tokenizer.vocab_size, n_embd=256, n_head=4, n_layer=4,
-                context_size=1024, dropout=DROPOUT)
-    assert BLOCK_SIZE <= 1024, "BLOCK_SIZE must not exceed the model's context_size"
+    model = GPT(vocab_size=tokenizer.vocab_size, n_embd=N_EMBD, n_head=N_HEAD,
+                n_layer=N_LAYER, context_size=CONTEXT_SIZE, dropout=DROPOUT)
+    assert BLOCK_SIZE <= CONTEXT_SIZE, "BLOCK_SIZE must not exceed CONTEXT_SIZE"
     model.to(DEVICE)
     amp_dtype = pick_amp_dtype()
 
@@ -228,7 +269,7 @@ def main():
     train_or_load(model, train_data, val_data, amp_dtype)
 
     # 5. let the trained model continue a Rust prompt (autoregressive sampling)
-    prompt = "pub fn "
+    prompt = "pub fn"
     print("\n--- generation ---")
     print(f"prompt      : {prompt!r}")
     print("continuation:")

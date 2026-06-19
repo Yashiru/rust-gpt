@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use fancy_regex::Regex;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -306,6 +307,26 @@ impl Tokenizer {
                 .par_iter()
                 .map(|t| encode_text(t, &self.core.ranks))
                 .collect()
+        })
+    }
+
+    /// Encode `text`, returning the ids packed as little-endian u16 bytes.
+    ///
+    /// Bulk path for large corpora: avoids handing Python a list of hundreds of
+    /// millions of int objects (tens of GB of RAM). The caller wraps the result
+    /// with `numpy.frombuffer(..., dtype="<u2")`. Requires vocab_size <= 65536.
+    fn encode_u16_bytes<'py>(&self, py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyBytes>> {
+        if self.core.vocab.len() > 65536 {
+            return Err(PyValueError::new_err(
+                "encode_u16_bytes requires vocab_size <= 65536",
+            ));
+        }
+        let ids = py.allow_threads(|| encode_text(text, &self.core.ranks));
+        PyBytes::new_with(py, ids.len() * 2, |buf| {
+            for (i, &id) in ids.iter().enumerate() {
+                buf[2 * i..2 * i + 2].copy_from_slice(&(id as u16).to_le_bytes());
+            }
+            Ok(())
         })
     }
 
