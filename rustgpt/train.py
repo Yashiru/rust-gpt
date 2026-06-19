@@ -8,7 +8,6 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-import numpy as np
 
 from rustgpt import Tokenizer, TOKENIZER_BACKEND  # fast Rust drop-in if built, else Python
 from rustgpt.model import GPT
@@ -18,7 +17,7 @@ CORPUS_PATH = Path("data/rust_corpus.txt")  # concatenated .rs files
 IDS_PATH = Path("data/rust_ids.bin")        # corpus encoded to token ids (uint16 cache)
 WEIGHTS_PATH = Path("weights.pt")           # trained model cache
 VOCAB_PATH = Path("tokenizer.json")         # trained tokenizer cache
-VOCAB_SIZE = 32768                           # 256 base bytes + 7936 learned merges
+VOCAB_SIZE = 32768                           # 256 base bytes + 32512 learned merges
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # train on the GPU when available
 
 STEPS = 5000
@@ -31,6 +30,7 @@ EVAL_INTERVAL = 250     # estimate train/val loss every N steps
 EVAL_ITERS = 50         # how many batches to average when estimating loss
 DROPOUT = 0.2           # regularization: drop this fraction of activations during training
 WEIGHT_DECAY = 0.1      # AdamW L2 penalty (applied to matmul/embedding weights only)
+EARLY_STOP_PATIENCE = 5 # stop if val loss hasn't improved for this many evals
 
 def load_or_train_tokenizer():
     """Load the tokenizer from the JSON cache, or train it (in Rust) if absent."""
