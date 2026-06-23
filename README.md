@@ -9,6 +9,12 @@ together a stack of libraries.
 It is a companion to [nn-forge](https://github.com/Yashiru/nn-forge), my other
 from-scratch experimentation repo.
 
+> [!TIP]
+> **Curious how attention actually works?** I wrote a detailed explanation mapped
+> line by line onto this codebase, covering Q/K/V, the scaled dot product, the
+> causal mask, multi-head, and RoPE. Read it here:
+> **[docs/attention.md](docs/attention.md)**.
+
 ## Two builds, from scratch
 
 The repo is really two things I wanted to build myself and understand:
@@ -77,8 +83,8 @@ A Llama-style decoder, all written by hand in [`rustgpt/model.py`](rustgpt/model
 Training recipe: AdamW with separate weight-decay groups, cosine learning rate with
 linear warmup, gradient clipping, dropout, and fp16 with a gradient scaler.
 
-There is a longer write-up of how attention works, in my own words and mapped onto this
-code, in [docs/attention.md](docs/attention.md).
+There is a longer write-up of how attention works, mapped onto this code, in
+[docs/attention.md](docs/attention.md).
 
 ## The tokenizer: from a Python prototype to a Rust accelerator
 
@@ -136,7 +142,7 @@ rust-gpt/
 │   ├── download_corpus_hf.py      # build the corpus from the-stack (HF)
 │   ├── download_corpus.py         # build the corpus from crates.io
 │   └── benchmark.py               # Rust vs Python timing
-├── docs/attention.md              # how attention works, in my own words
+├── docs/attention.md              # how attention works, mapped onto the code
 └── tests/test_tokenizer.py        # Rust/Python parity + round-trip
 ```
 

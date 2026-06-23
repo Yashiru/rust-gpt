@@ -1,9 +1,8 @@
 # How attention works in this model
 
-This is my own explanation of the attention mechanism, written while building the
-transformer in [`rustgpt/model.py`](../rustgpt/model.py). The goal is to write down what
-each piece actually does and why it is there, in terms I would use to explain it to a
-colleague.
+This explains the attention mechanism as it is implemented in the transformer in
+[`rustgpt/model.py`](../rustgpt/model.py). The goal is to write down what each piece
+actually does and why it is there, in terms I would use to explain it to a colleague.
 
 I deliberately kept two attention paths in the code. The default one calls PyTorch's
 fused `scaled_dot_product_attention`, which is what you want for speed. The second one
